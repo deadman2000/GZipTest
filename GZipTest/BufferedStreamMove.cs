@@ -7,7 +7,7 @@ using System.Threading;
 namespace GZipTest
 {
     /// <summary>
-    /// Выполняет асинхронное чтение из одного потока с асинхронной записью в другой поток
+    /// Выполняет асинхронное чтение из одного стрима с асинхронной записью в другой стрим
     /// </summary>
     public abstract class BufferedStreamMove
     {
@@ -34,6 +34,7 @@ namespace GZipTest
 
         private long _fileSize; // Размер исходного файла
         private int _progress = 0; // Прогресс записи в % в диапазоне 0..100
+        private bool _isStart = false; // Признак запуска процесса
         private bool _success = true; // Признак успешного выполнения. Если потоки прерываются из-за ошибки, устанавливается в false
 
         public BufferedStreamMove()
@@ -52,7 +53,7 @@ namespace GZipTest
         }
 
         /// <summary>
-        /// Прогресс обработки потока
+        /// Прогресс записи выходного стрима
         /// </summary>
         public int Progress => _progress;
 
@@ -62,20 +63,32 @@ namespace GZipTest
         public bool Success => _success;
 
         /// <summary>
-        /// Запускает процесс перемещения потоков. Возвращает текущий экземпляр
+        /// Запускает процесс перемещения стримов. Возвращает текущий экземпляр
         /// </summary>
+        /// <returns>Текущий экземпляр</returns>
         public BufferedStreamMove Start()
         {
+            if (_isStart) throw new InvalidOperationException("Process already started"); // TODO Можно сделать отдельное исключение на то что процесс был запущен и уже остоновился
+
+            _isStart = true;
             _readThread.Start();
             _writeThread.Start();
             return this;
         }
 
-        protected abstract Stream CreateOutputStream();
-
+        /// <summary>
+        /// Создает входной поток
+        /// </summary>
+        /// <returns></returns>
         protected abstract Stream CreateInputStream();
 
-        private void ReadFile()
+        /// <summary>
+        /// Создает выходной поток
+        /// </summary>
+        /// <returns></returns>
+        protected abstract Stream CreateOutputStream();
+
+        private void ReadFile() // Поток чтения входного стрима
         {
             try
             {
@@ -121,7 +134,7 @@ namespace GZipTest
             }
         }
 
-        private void WriteFile()
+        private void WriteFile() // Поток записи в выходной стрим
         {
             try
             {
@@ -177,11 +190,12 @@ namespace GZipTest
                 if (DEBUG) Console.WriteLine(ex);
                 _success = false;
                 Stop();
+                OnWriteInterrupted();
             }
         }
 
         /// <summary>
-        /// Вызывается при прерывании потока записи
+        /// Вызывается при прерывании потока записи. Позволяет удалить файл назначения при прерывании или ошибке
         /// </summary>
         protected virtual void OnWriteInterrupted()
         {

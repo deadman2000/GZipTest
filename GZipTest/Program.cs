@@ -12,10 +12,7 @@ namespace GZipTest
             
             if (args.Length < 3)
             {
-                Console.WriteLine("Using: GZipTest <command> <source> <destination>");
-                Console.WriteLine("  Compressing: GZipTest compress <source-file> <destination-archive>");
-                Console.WriteLine("  Decompressing: GZipTest decompress <source-archive> <destination-file>");
-                Environment.ExitCode = 1;
+                Help();
                 return;
             }
 
@@ -27,9 +24,20 @@ namespace GZipTest
                 case "decompress":
                     Environment.ExitCode = Decompress(args[1], args[2]);
                     break;
+                default:
+                    Help();
+                    break;
             }
         }
-        
+
+        private static void Help()
+        {
+            Console.WriteLine("Using: GZipTest <command> <source> <destination>");
+            Console.WriteLine("  Compressing: GZipTest compress <source-file> <destination-archive>");
+            Console.WriteLine("  Decompressing: GZipTest decompress <source-archive> <destination-file>");
+            Environment.ExitCode = 1;
+        }
+
         private static int Compress(string source, string dest)
         {
             job = new GZipCompressor(source, dest).Start();
@@ -47,7 +55,7 @@ namespace GZipTest
         {
             if (job != null)
                 job.Stop();
-            e.Cancel = true;
+            e.Cancel = true; // Это надо, чтобы консоль не закрывалась по нажатию на Ctrl+C
         }
     }
 }
