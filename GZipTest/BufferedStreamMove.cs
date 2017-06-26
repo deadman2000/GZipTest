@@ -145,11 +145,11 @@ namespace GZipTest
                     {
                         // Пытаемся получить блок данных из очереди
                         byte[] data = null;
-                        lock (_syncRoot)
+                        lock (_syncRoot)   // Исключаем параллельное использование
                         {
-                            if (_queue.Count > 0)
+                            if (_queue.Count > 0) // Очередь не пуста
                             {
-                                data = _queue.Dequeue();
+                                data = _queue.Dequeue(); // Извлекаем блок
                                 _dequeueItemEvent.Set(); // Сообщаем, что мы извлекли блок из очереди
                             }
                         }
