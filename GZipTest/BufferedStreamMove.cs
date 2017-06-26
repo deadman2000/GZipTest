@@ -12,7 +12,7 @@ namespace GZipTest
     public abstract class BufferedStreamMove
     {
         static bool DEBUG = false; // Режим вывода дополнительных логов в консоль
-        static bool OUT_PERCENT = true; // Режим вывода прогресса в консоль
+        static bool OUT_PERCENT = false; // Режим вывода прогресса в консоль
 
         const int BLOCK_SIZE = 10 * 1024; // Размер одного блока (10 Kb)
         const int MAX_BLOCKS = 30; // При заполнении очереди до MAX_BLOCKS ...
@@ -32,7 +32,7 @@ namespace GZipTest
 
         private Thread _readThread, _writeThread; // Потоки чтения и записи
 
-        private long _fileSize; // Размер исходного файла
+        private long _inputLength; // Размер исходного файла
         private int _progress = 0; // Прогресс записи в % в диапазоне 0..100
         private bool _isStart = false; // Признак запуска процесса
         private bool _success = true; // Признак успешного выполнения. Если потоки прерываются из-за ошибки, устанавливается в false
@@ -92,32 +92,32 @@ namespace GZipTest
         {
             try
             {
-                byte[] buff = new byte[BLOCK_SIZE];
-                int count;
-
-                using (var inStream = CreateInputStream())
+                using (var inStream = CreateInputStream()) // Создаем входной стрим
                 {
-                    if (inStream.CanSeek)
-                        _fileSize = inStream.Length;
-                    while (!_exitThreadEvent.WaitOne(0, false))
+                    if (inStream.CanSeek) // Длина стрима может быть не доступна
+                        _inputLength = inStream.Length;
+
+                    int count; // Переменная для числа считанных байт
+                    while (!_exitThreadEvent.WaitOne(0, false)) // Цикл пока процес не остановят
                     {
-                        count = inStream.Read(buff, 0, buff.Length);
+                        byte[] data = new byte[BLOCK_SIZE]; // Считываем данные из потока
+                        count = inStream.Read(data, 0, data.Length);
                         if (count == 0) break;
 
-                        lock (_syncRoot)
+                        if (DEBUG) Console.WriteLine("Read {0}", count);
+                        if (data.Length != count) // Размер считанного блока не совпадает. Изменяем размер массива
+                            Array.Resize(ref data, count);
+
+                        lock (_syncRoot) // Исключаем параллельное использование очереди
                         {
-                            if (DEBUG) Console.WriteLine("Read {0}", count);
-                            byte[] data = new byte[count];
-                            Array.Copy(buff, data, count);
-                            _queue.Enqueue(data);
-                            _newItemEvent.Set();
+                            _queue.Enqueue(data); // Добавляем в очередь
+                            _newItemEvent.Set(); // Сигналим о добавлении нового элемента
                         }
 
-                        if (_queue.Count >= MAX_BLOCKS)
-                            while (_queue.Count > MIN_BLOCKS)
+                        if (_queue.Count >= MAX_BLOCKS) // Превысили верхний порог
+                            while (_queue.Count > MIN_BLOCKS) // Ждем пока опустимся до нижнего порога
                             {
-                                int w = WaitHandle.WaitAny(_readEventArray);
-                                if (w == 1)
+                                if (WaitHandle.WaitAny(_readEventArray) == 1) // Возможна ситуация, когда процесс остановили - WaitAny вернет 1
                                     break;
                             }
                     }
@@ -129,8 +129,8 @@ namespace GZipTest
             catch (Exception ex)
             {
                 if (DEBUG) Console.WriteLine(ex);
-                _success = false;
-                Stop();
+                _success = false; // Отмечаем, что процесс завершился с ошибкой
+                Stop(); // Останавливаем второй поток
             }
         }
 
@@ -138,38 +138,39 @@ namespace GZipTest
         {
             try
             {
-                using (var outStream = CreateOutputStream())
+                using (var outStream = CreateOutputStream()) // Создаем выходной стрим
                 {
                     long totalWrite = 0; // Счетчик записанных байт
                     while (!_exitThreadEvent.WaitOne(0, false)) // Цикл пока процес не остановят
                     {
-                        byte[] buff = null;
+                        // Пытаемся получить блок данных из очереди
+                        byte[] data = null;
                         lock (_syncRoot)
                         {
                             if (_queue.Count > 0)
                             {
-                                buff = _queue.Dequeue();
+                                data = _queue.Dequeue();
                                 _dequeueItemEvent.Set(); // Сообщаем, что мы извлекли блок из очереди
                             }
                         }
 
-                        if (buff == null) // Очередь пуста
+                        if (data == null) // Очередь пуста
                         {
                             if (_readCompleted) break; // Чтение закончено, выходим
 
-                            if (WaitHandle.WaitAny(_writeEventArray) == 1) // Ждем добавления нового или прерывания
+                            if (WaitHandle.WaitAny(_writeEventArray) == 1) // Ждем добавления нового блока или прерывания
                                 break;
                         }
-                        else
+                        else // Успешно извлекли блок
                         {
-                            if (DEBUG) Console.WriteLine("Write {0}", buff.Length);
-                            outStream.Write(buff, 0, buff.Length);
+                            if (DEBUG) Console.WriteLine("Write {0}", data.Length);
+                            outStream.Write(data, 0, data.Length);
 
                             // Считаем прогресс
-                            totalWrite += buff.Length;
-                            if (_fileSize != 0) // _fileSize может быть равен 0, если поток чтения не успел открыть файл или входной поток не поддерживает определение длины
+                            totalWrite += data.Length;
+                            if (_inputLength != 0) // Длина может быть равна 0, если поток чтения не успел открыть файл, или входной поток не поддерживает определение длины
                             {
-                                int p = (int)(100 * totalWrite / _fileSize);
+                                int p = (int)(100 * totalWrite / _inputLength);
                                 if (p != _progress) // Выводим прогресс, только если он поменялся
                                 {
                                     _progress = p;
@@ -188,9 +189,9 @@ namespace GZipTest
             catch (Exception ex)
             {
                 if (DEBUG) Console.WriteLine(ex);
-                _success = false;
-                Stop();
-                OnWriteInterrupted();
+                _success = false; // Отмечаем, что процесс завершился с ошибкой
+                Stop(); // Останавливаем второй поток
+                OnWriteInterrupted(); // Не забываем удалить файлы и пр.
             }
         }
 
